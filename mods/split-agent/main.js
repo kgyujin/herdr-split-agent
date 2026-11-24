@@ -7,6 +7,7 @@
 // 작성일: 2026-11-24
 // 변경사항 내역:
 // - 2026-11-24 | 최초 작성 | 이동, 복구, 언어와 일반 터미널 설정, 창 없는 세션 자동 복구
+// - 2026-11-24 | 클릭 수정 | 버튼 클릭의 cx로 await 하던 문제를 cx.spawn으로 해결, 예외 시 이동 중 표시 해제
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -236,6 +237,20 @@ export default class SplitAgent extends View {
     closeOverlay(props().overlay);
   }
 
+  // on_click의 cx는 await을 넘어 쓸 수 없다(첫 sleep에서 멈춘다). cx.spawn이 주는 비동기용 cx로 실행한다.
+  act(cx, work) {
+    if (this.busy) return;
+    this.message = null;
+    cx.spawn(async (acx) => {
+      try {
+        await work(acx);
+      } catch (error) {
+        this.fail(String(error?.message ?? error));
+      }
+      acx.notify?.();
+    });
+  }
+
   button(th, id, label, glyph, onClick) {
     return h_flex()
       .id(id)
@@ -249,7 +264,7 @@ export default class SplitAgent extends View {
       .text_color(th.foreground)
       .bg(th.raised)
       .hover((el) => el.bg(th.hover))
-      .on_click((_e, cx) => onClick(cx))
+      .on_click((_e, cx) => this.act(cx, onClick))
       .child(div().text_color(th.muted).child(glyph))
       .child(label);
   }
