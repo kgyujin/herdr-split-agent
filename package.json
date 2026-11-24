@@ -1,0 +1,10 @@
+{
+  "name": "herdr-split-agent",
+  "version": "0.1.0",
+  "description": "Show a running agent next to the current pane in the Herdr app, without restarting it",
+  "bin": { "herdr-split-agent": "bin/herdr-split-agent" },
+  "files": ["bin", "mods", "VERSION"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/kgyujin/herdr-split-agent.git" },
+  "keywords": ["herdr", "mod", "terminal", "agents", "claude-code", "codex"]
+}

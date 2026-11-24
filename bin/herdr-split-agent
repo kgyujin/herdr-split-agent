@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# herdr-split-agent: Herdr 앱의 split-agent mod를 설치, 삭제, 업데이트한다.
+#
+# 작성자: kgyujin
+# 작성목적: 다른 mod와 설정을 건드리지 않고 split-agent 한 폴더와 단축키 한 줄만 관리
+# 작성일: 2026-11-24
+# 변경사항 내역:
+# - 2026-11-24 | 최초 작성 | install, uninstall, update, status, key, config, auto-update
+
+set -euo pipefail
+
+REPO="kgyujin/herdr-split-agent"
+MOD="split-agent"
+COMMAND_VALUE="mod.open:split-agent"
+DEFAULT_KEY="cmd-alt-v"
+AGENT_LABEL="dev.kgyujin.herdr-split-agent"
+
+APP_HOME="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
+MOD_DIR="$APP_HOME/mods/$MOD"
+KEYS_FILE="$APP_HOME/keys.json"
+META_FILE="$MOD_DIR/.herdr-split-agent.json"
+CONFIG_FILE="$MOD_DIR/config.json"
+
+resolve_self() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [[ -L "$src" ]]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="$dir/$src"
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+SELF_DIR="$(resolve_self)"
+SELF_PATH="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
+# 소스 폴더: 저장소(bin/..), Homebrew(share), 또는 --from으로 지정한 곳
+find_source() {
+  for candidate in "$SELF_DIR/../mods/$MOD" "$SELF_DIR/../share/herdr-split-agent/mods/$MOD"; do
+    [[ -f "$candidate/main.js" ]] && { (cd "$candidate" && pwd); return 0; }
+  done
+  return 1
+}
+source_version() { [[ -f "$1/../../VERSION" ]] && tr -d '[:space:]' < "$1/../../VERSION" || echo "unknown"; }
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+usage() {
+  cat <<USAGE
+herdr-split-agent: install and manage the split-agent mod for the Herdr app
+
+Usage:
+  herdr-split-agent install [--key COMBO] [--lang en|ko] [--force]
+  herdr-split-agent update [--check] [--quiet]
+  herdr-split-agent uninstall [--keep-config]
+  herdr-split-agent status
+  herdr-split-agent key [COMBO]            show or change the open shortcut
+  herdr-split-agent config [NAME [VALUE]]  names: lang (en|ko), shells (true|false)
+  herdr-split-agent auto-update on|off|status
+  herdr-split-agent version
+
+Only mods/$MOD and one line in keys.json are touched. Other mods are never read or changed.
+Env: HERDR_APP_HOME overrides the Herdr app folder (default ~/.config/herdr-app).
+USAGE
+}
+
+require_app_dir() {
+  [[ -d "$APP_HOME" ]] || die "Herdr app folder not found: $APP_HOME (start the Herdr app once)"
+  [[ -f "$KEYS_FILE" ]] || die "keys.json not found in $APP_HOME (start the Herdr app once)"
+  need python3
+}
+
+# keys.json 수정: 백업 후 python으로 한 줄만 바꾼다. 인자: set COMBO | unset COMBO | owner COMBO
+keys_edit() {
+  python3 -I - "$KEYS_FILE" "$@" <<'PY'
+import json, os, shutil, sys, time, glob
+path, action, combo, value, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1"
+with open(path, encoding="utf-8") as f:
+    keys = json.load(f)
+def owners(c):
+    return [(sec, act) for sec, m in keys.items() if isinstance(m, dict) for k, act in m.items() if k == c]
+if action == "check":
+    other = [(s, a) for s, a in owners(combo) if a != value]
+    if other:
+        print("; ".join(f"{s}: {a}" for s, a in other)); sys.exit(3)
+    sys.exit(0)
+changed = False
+if action == "set":
+    other = [(s, a) for s, a in owners(combo) if a != value]
+    if other and not force:
+        print("; ".join(f"{s}: {a}" for s, a in other)); sys.exit(3)
+    sec = keys.setdefault("global", {})
+    if sec.get(combo) != value:
+        sec[combo] = value; changed = True
+elif action == "unset":
+    for sec, m in keys.items():
+        if isinstance(m, dict):
+            for k in [k for k, a in m.items() if k == combo and a == value]:
+                del m[k]; changed = True
+if changed:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    shutil.copy2(path, f"{path}.bak-split-agent-{stamp}")
+    for old in sorted(glob.glob(path + ".bak-split-agent-*"))[:-3]:
+        os.remove(old)
+    tmp = path + ".tmp-split-agent"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(keys, f, indent=2, ensure_ascii=False); f.write("\n")
+    os.replace(tmp, path)
+print("changed" if changed else "unchanged")
+PY
+}
+
+meta_get() { [[ -f "$META_FILE" ]] && python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$META_FILE" "$1" || true; }
+meta_set() {
+  python3 -I - "$META_FILE" "$@" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+data = json.load(open(path)) if os.path.exists(path) else {}
+for pair in sys.argv[2:]:
+    k, v = pair.split("=", 1); data[k] = v
+json.dump(data, open(path, "w"), indent=2); open(path, "a").write("\n")
+PY
+}
+config_set() {
+  python3 -I - "$CONFIG_FILE" "$1" "$2" <<'PY'
+import json, os, sys
+path, name, value = sys.argv[1:4]
+data = json.load(open(path)) if os.path.exists(path) else {}
+if name == "lang":
+    data["lang"] = value
+elif name == "shells":
+    data["includeShells"] = value == "true"
+json.dump(data, open(path, "w"), indent=2); open(path, "a").write("\n")
+PY
+}
+
+copy_mod() {
+  local from="$1" dest="$2"
+  mkdir -p "$dest"
+  for f in mod.json main.js; do
+    [[ -f "$from/$f" ]] || die "missing $from/$f"
+    cp "$from/$f" "$dest/$f.new" && mv "$dest/$f.new" "$dest/$f"
+  done
+}
+
+check_mod() {
+  if command -v herdr-app >/dev/null 2>&1; then
+    herdr-app check "$1" >/dev/null 2>&1 || return 1
+  fi
+}
+
+cmd_install() {
+  local key="" lang="" force=0 from=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --key) key="${2:?--key needs a value}"; shift 2 ;;
+      --lang) lang="${2:?--lang needs en or ko}"; shift 2 ;;
+      --force) force=1; shift ;;
+      --from) from="${2:?--from needs a folder}"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  require_app_dir
+  [[ -z "$lang" || "$lang" == en || "$lang" == ko ]] || die "--lang must be en or ko"
+  local src
+  if [[ -n "$from" ]]; then src="$from"; else src="$(find_source)" || die "mod source not found next to this script"; fi
+  [[ -z "$key" ]] && key="$(meta_get key)"
+  [[ -z "$key" ]] && key="$DEFAULT_KEY"
+  # 단축키가 다른 동작에 쓰이는지 먼저 본다. 쓰이면 아무것도 설치하지 않는다.
+  local clash
+  if ! clash="$(keys_edit check "$key" "$COMMAND_VALUE" 0)"; then
+    die "$key is already bound to: $clash. Pick another with --key, or use --force to replace it."
+  fi
+  local fresh=1; [[ -d "$MOD_DIR" ]] && fresh=0
+  copy_mod "$src" "$MOD_DIR"
+  if ! check_mod "$MOD_DIR"; then
+    [[ $fresh -eq 1 ]] && rm -rf "$MOD_DIR"
+    die "herdr-app check failed for the mod, nothing was kept"
+  fi
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    [[ -z "$lang" ]] && case "${LC_ALL:-${LANG:-}}" in ko*) lang=ko ;; *) lang=en ;; esac
+    config_set lang "$lang" >/dev/null
+  elif [[ -n "$lang" ]]; then
+    config_set lang "$lang"
+  fi
+  local old; old="$(meta_get key)"
+  [[ -n "$old" && "$old" != "$key" ]] && keys_edit unset "$old" "$COMMAND_VALUE" 0 >/dev/null
+  keys_edit set "$key" "$COMMAND_VALUE" "$force" >/dev/null || die "could not bind $key"
+  local kind=script
+  case "$SELF_DIR" in *Cellar*|*homebrew*|*/opt/*) kind=brew ;; esac
+  meta_set "version=$(source_version "$src")" "key=$key" "source=$kind" >/dev/null
+  say "installed split-agent $(source_version "$src") -> $MOD_DIR"
+  say "open it with $key (Herdr reloads mods and keys by itself)"
+}
+
+cmd_uninstall() {
+  local keep=0
+  [[ "${1:-}" == "--keep-config" ]] && keep=1
+  [[ -d "$APP_HOME" ]] || die "Herdr app folder not found: $APP_HOME"
+  need python3
+  local key; key="$(meta_get key)"; [[ -z "$key" ]] && key="$DEFAULT_KEY"
+  if [[ -f "$APP_HOME/shared.json" ]] && python3 -I -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get("split-agent.moves") else 1)' "$APP_HOME/shared.json" 2>/dev/null; then
+    say "note: some agents are still attached beside other panes. They keep running where they are; send them back first if you want the old layout."
+  fi
+  [[ -f "$KEYS_FILE" ]] && keys_edit unset "$key" "$COMMAND_VALUE" 0 >/dev/null
+  cmd_auto_update off >/dev/null 2>&1 || true
+  if [[ -d "$MOD_DIR" ]]; then
+    if [[ $keep -eq 1 && -f "$CONFIG_FILE" ]]; then
+      find "$MOD_DIR" -mindepth 1 ! -name config.json -delete
+    else
+      rm -rf "$MOD_DIR"
+    fi
+  fi
+  rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/herdr-split-agent"
+  say "uninstalled split-agent (other mods and settings were not touched)"
+}
+
+latest_tag() {
+  need curl; need python3
+  curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest" \
+    | python3 -I -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])'
+}
+ver_gt() { [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" ]]; }
+
+cmd_update() {
+  local check=0 quiet=0
+  for a in "$@"; do case "$a" in --check) check=1 ;; --quiet) quiet=1 ;; *) die "unknown option: $a" ;; esac; done
+  require_app_dir
+  [[ -d "$MOD_DIR" ]] || die "split-agent is not installed (run: herdr-split-agent install)"
+  local tag current; tag="$(latest_tag)" || die "could not read the latest release"
+  current="$(meta_get version)"; current="${current:-0.0.0}"
+  if ! ver_gt "${tag#v}" "$current"; then [[ $quiet -eq 1 ]] || say "up to date ($current)"; return 0; fi
+  [[ $check -eq 1 ]] && { say "update available: $current -> ${tag#v}"; return 0; }
+  local work; work="$(mktemp -d)"; trap 'rm -rf "$work"' RETURN
+  curl -fsSL --max-time 60 "https://github.com/$REPO/archive/refs/tags/$tag.tar.gz" | tar -xz -C "$work" || die "download failed, nothing changed"
+  local src; src="$(echo "$work"/*/mods/$MOD)"
+  [[ -f "$src/main.js" ]] || die "release has no mod, nothing changed"
+  check_mod "$src" || die "the new version failed herdr-app check, nothing changed"
+  local backup="$MOD_DIR.previous"; rm -rf "$backup"; cp -R "$MOD_DIR" "$backup"
+  if copy_mod "$src" "$MOD_DIR" && check_mod "$MOD_DIR"; then
+    meta_set "version=${tag#v}" >/dev/null; rm -rf "$backup"
+    [[ $quiet -eq 1 ]] || say "updated $current -> ${tag#v}"
+  else
+    rm -rf "$MOD_DIR"; mv "$backup" "$MOD_DIR"; die "update failed, the previous version was restored"
+  fi
+}
+
+cmd_status() {
+  say "herdr app folder: $APP_HOME $([[ -d "$APP_HOME" ]] && echo '(found)' || echo '(missing)')"
+  if [[ -d "$MOD_DIR" ]]; then
+    say "installed: yes, version $(meta_get version), shortcut $(meta_get key)"
+    [[ -f "$CONFIG_FILE" ]] && say "config: $(tr -d '\n ' < "$CONFIG_FILE")"
+  else
+    say "installed: no"
+  fi
+  case "$(uname)" in Darwin) [[ -f "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" ]] && say "auto-update: on" || say "auto-update: off" ;; *) say "auto-update: not supported on this OS" ;; esac
+}
+
+cmd_key() {
+  require_app_dir
+  [[ -d "$MOD_DIR" ]] || die "split-agent is not installed"
+  if [[ $# -eq 0 ]]; then say "$(meta_get key)"; return 0; fi
+  local new="$1" old clash; old="$(meta_get key)"
+  [[ "$new" == "$old" ]] && { say "already $new"; return 0; }
+  if ! clash="$(keys_edit check "$new" "$COMMAND_VALUE" 0)"; then die "$new is already bound to: $clash"; fi
+  [[ -n "$old" ]] && keys_edit unset "$old" "$COMMAND_VALUE" 0 >/dev/null
+  keys_edit set "$new" "$COMMAND_VALUE" 0 >/dev/null
+  meta_set "key=$new" >/dev/null
+  say "shortcut is now $new"
+}
+
+cmd_config() {
+  [[ -d "$MOD_DIR" ]] || die "split-agent is not installed"
+  need python3
+  if [[ $# -eq 0 ]]; then [[ -f "$CONFIG_FILE" ]] && cat "$CONFIG_FILE" || say "{}"; return 0; fi
+  [[ $# -eq 2 ]] || die "usage: config NAME VALUE"
+  case "$1:$2" in
+    lang:en|lang:ko|shells:true|shells:false) config_set "$1" "$2"; say "$1 = $2" ;;
+    *) die "valid: lang en|ko, shells true|false" ;;
+  esac
+}
+
+cmd_auto_update() {
+  [[ "$(uname)" == Darwin ]] || die "auto-update uses a macOS LaunchAgent; on other systems run 'herdr-split-agent update --quiet' from cron or a systemd timer"
+  local plist="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
+  case "${1:-status}" in
+    on)
+      [[ -d "$MOD_DIR" ]] || die "split-agent is not installed"
+      mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+      cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$AGENT_LABEL</string>
+  <key>ProgramArguments</key><array><string>$SELF_PATH</string><string>update</string><string>--quiet</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>StartInterval</key><integer>86400</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/herdr-split-agent.log</string>
+</dict></plist>
+PLIST
+      launchctl bootout "gui/$(id -u)/$AGENT_LABEL" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/$(id -u)" "$plist" && say "auto-update on (checks once a day and at login)" ;;
+    off)
+      launchctl bootout "gui/$(id -u)/$AGENT_LABEL" >/dev/null 2>&1 || true
+      rm -f "$plist"; say "auto-update off" ;;
+    status) [[ -f "$plist" ]] && say "auto-update: on" || say "auto-update: off" ;;
+    *) die "usage: auto-update on|off|status" ;;
+  esac
+}
+
+case "${1:-help}" in
+  install) shift; cmd_install "$@" ;;
+  uninstall|remove) shift; cmd_uninstall "$@" ;;
+  update|upgrade) shift; cmd_update "$@" ;;
+  status) cmd_status ;;
+  key) shift; cmd_key "$@" ;;
+  config) shift; cmd_config "$@" ;;
+  auto-update) shift; cmd_auto_update "$@" ;;
+  version|--version|-v) say "$(source_version "$(find_source || echo /nonexistent/x/y)")" ;;
+  help|--help|-h) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
