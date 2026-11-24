@@ -1,6 +1,6 @@
 {
   "name": "herdr-split-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Show a running agent next to the current pane in the Herdr app, without restarting it",
   "bin": { "herdr-split-agent": "bin/herdr-split-agent" },
   "files": ["bin", "mods", "VERSION"],
