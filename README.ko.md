@@ -1,4 +1,18 @@
+<div align="center">
+
 # herdr-split-agent
+
+_실행 중인 에이전트를 지금 작업하는 창 옆에 붙이고, 끝나면 돌려보냅니다. 재시작도, resume도, 세션 ID도 필요 없습니다._
+
+[![Release](https://img.shields.io/github/v/release/kgyujin/herdr-split-agent?logo=github)](https://github.com/kgyujin/herdr-split-agent/releases/latest)
+[![test](https://img.shields.io/github/actions/workflow/status/kgyujin/herdr-split-agent/test.yml?label=test)](https://github.com/kgyujin/herdr-split-agent/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+[설치](#설치) · [사용법](#사용법) · [관리](#관리) · [한계](#한계) · [English](README.md)
+
+<img src="docs/hero.svg" alt="그림: 목록에서 에이전트의 오른쪽을 누르면 현재 창 옆에 붙는 모습" width="820">
+
+</div>
 
 실행 중인 에이전트 세션을 재시작이나 resume 없이 지금 보는 창 옆에 붙이고, 끝나면 원래 자리로 돌려보내는 [Herdr](https://github.com/herdrdev/herdr-app) mod입니다. 세션 ID나 명령어를 입력하지 않습니다.
 
@@ -6,6 +20,8 @@
 > Herdr 팀이 만든 공식 mod가 아닌 개인 mod입니다.
 
 ## 사용법
+
+> 위 그림은 실제 화면이 아니라 설명용 그림입니다.
 
 단축키(기본 `cmd-alt-v`)로 에이전트 목록을 열고, 원하는 줄에서 **오른쪽** 또는 **아래**를 누릅니다. 에이전트가 대화 기록과 프로세스를 그대로 가진 채 포커스된 창 옆에 붙습니다. **원래 자리로**를 누르면 원래 공간과 탭으로 돌아갑니다.
 
